@@ -1,7 +1,11 @@
 
+import re
 import asyncio
-import aiohttp
 import logging
+
+import aiohttp
+
+from .datastore import DataStore
 
 class Engine(object):
     def __init__(self, loop, workers=5):
@@ -9,6 +13,7 @@ class Engine(object):
         self.queue = asyncio.Queue()
         self.workers = workers
         self.session = aiohttp.ClientSession(loop=self.loop)
+        self.datastorepath = 'crawler.sqlite'
         pass
 
     def process_command(self, cmd):
@@ -39,6 +44,9 @@ class Engine(object):
         for task in self.tasks:
             task.cancel()
 
+    def open_datastore(self):
+        return DataStore(self.datastorepath)
+
     @asyncio.coroutine
     def worker(self):
         logging.debug("Spawned worker")
@@ -55,7 +63,26 @@ class Engine(object):
     def check_url(self, url):
         try:
             response = yield from self.session.get(url)
+            logging.debug("Headers: %s", response.headers)
             logging.info("Result: %s; %s", url, response.status)
             txt = yield from response.text()
+            self.process_result(url, response, txt)
         except Exception as exc:
             logging.warning("Error: %s; %s", url, repr(exc))
+
+
+    def process_result(self, url, response, txt):
+        ds = self.open_datastore()
+        urlid = ds.insert_url(url)
+        link = None
+        if response.status == 451:
+            logging.info("451 response detected")
+            link = response.headers.get('Link')
+            if link is not null:
+                if re.match('.* rel="?blocked-by"?', link):
+                    logging.info("Valid link header present")
+                    link = link.split()[0]
+                else:
+                    logging.warn("No valid link header present")
+        ds.insert_result(response.status, link, urlid=urlid)
+
